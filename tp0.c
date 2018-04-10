@@ -20,7 +20,7 @@ void configure_logger() {
         mostrarse por pantalla y mostrar solo los logs de nivel info para arriba
         (info, warning y error!)
   */
-  logger = log_create("/home/utnso/so/tp0.log", "tp0", 1, LOG_LEVEL_INFO);/* 1. */
+  logger = log_create("tp0.log", "TP0", true, LOG_LEVEL_INFO);/* 1. */
 }
 
 int connect_to_server(char * ip, char * port) {
@@ -48,9 +48,8 @@ int connect_to_server(char * ip, char * port) {
         Pss, revisen los niveles de log de las commons.
   */
 
-  if(retorno == -1){
-	  log_error(logger, "No se pudo conectar !");
-	  exit_gracefully(1);
+  if(retorno < 0){
+	  _exit_with_error(socket, "No se pudo conectar !", NULL);
   }
 
   // 4 Logeamos que pudimos conectar y retornamos el socket
@@ -69,14 +68,17 @@ void  wait_hello(int socket) {
         variable "hola". Entonces, vamos por partes:
         5.1.  Reservemos memoria para un buffer para recibir el mensaje.
   */
-  char * buffer = malloc(strlen(hola));
+  //char * buffer = malloc(strlen(hola));
+  char * buffer = (char*) calloc(sizeof(char), strlen(hola) + 1); // Es lo mismo que lo de arriba...bleh..
   /*
         5.2.  Recibamos el mensaje en el buffer.
         Recuerden el prototipo de recv:
         conexión - donde guardar - cant de bytes - flags(si no se pasa ninguno puede ir NULL)
         Nota: Palabra clave MSG_WAITALL.
   */
-  int result_recv = recv(socket, buffer, strlen(hola), MSG_WAITALL);
+  if(recv(socket, buffer, strlen(hola), MSG_WAITALL) <= 0) {
+	  _exit_with_error(socket, "Error al recibir msg.", buffer);
+  }
   /*
         5.3.  Chequiemos errores al recibir! (y logiemos, por supuesto)
         5.4.  Comparemos lo recibido con "hola".
@@ -84,17 +86,12 @@ void  wait_hello(int socket) {
         No se olviden de loggear y devolver la memoria que pedimos!
         (si, también si falló algo, tenemos que devolverla, atenti.)
   */
-  if(result_recv == -1){
-	  log_error(logger, "Error al recibir msg.");
-	  free(buffer);
-	  exit_gracefully(2);
+
+  if (strcmp(buffer, hola) != 0){
+	  _exit_with_error(socket, "Lo recibido NO es igual.", buffer);
   }
 
-  if (strcmp(buffer, hola) == 0){
-	  log_info(logger, "Lo recibido es igual.");
-  }else {
-	  log_error(logger, "Lo recibido NO es igual.%s\n", buffer);
-  }
+  log_info(logger, "Mensaje recibido: %s", buffer);
 
   free(buffer);
 
@@ -179,17 +176,15 @@ void send_hello(int socket, Alumno alumno) {
           por lo que no tiene padding y la podemos mandar directamente sin necesidad
           de un buffer y usando el tamaño del tipo Alumno!
   */
-  int resultado = send(socket, &alumno, sizeof(alumno), 0);//(send(/* ?? */, &alumno, /* ??? */, 0);
+  //(send(/* ?? */, &alumno, /* ??? */, 0);
+  if(send(socket, &alumno, sizeof(alumno), 0) <= 0){
+	  _exit_with_error(socket, "Error al enviar info del estudiante.", alumno);
+  }
     /*
       12.1. Recuerden que si hay error, hay que salir y tenemos que cerrar el socket (ademas de loggear)!
     */
-  if(resultado <= 0) {
-  	  log_error(logger, "Error al enviar info del estudiante. Resultado %d\n", resultado);
-  	  close(socket);
-  	  exit_gracefully(3);
-    } else {
-  	  log_info(logger, "Envio OK. Resultado: %d\n", resultado);
-    }
+
+  log_info(logger, "Envio OK. Resultado");
 
 }
 
@@ -228,14 +223,14 @@ void * wait_content(int socket) {
 
   void* content_buffer = calloc(sizeof(char), header -> len + 1);
 
-  free(header);
-
-  if(recv(socket, content_buffer,  sizeof(content_buffer), MSG_WAITALL) <= 0){
-	  _exit_with_error(socket, "Error al recibir contenido variable.", content_buffer);
+  if(recv(socket, content_buffer,  header -> len, MSG_WAITALL) <= 0){
+	  free(content_buffer);
+	  _exit_with_error(socket, "Error al recibir contenido variable.", header);
    }
 
-   log_info(logger, "Contenido variable recibido correctamente ! : %s", content_buffer);
+   log_info(logger, "Contenido variable recibido correctamente ! : %s", (char*) content_buffer);
 
+   free(header);
   /*
       15.   Finalmente, no te olvides de liberar la memoria que pedimos
             para el header y retornar el contenido recibido.
@@ -283,8 +278,11 @@ void send_md5(int socket, void * content) {
           anterior y el digest del MD5. Obviamente, validando tambien los errores.
   */
 	log_info(logger, "Enviando MD5...");
-	if(send(socket, buffer, sizeof(buffer), 0) <= 0){
-		_exit_with_error(socket, "No se pudo enviar el md5", buffer);
+	int result_send = send(socket, buffer, message_size, 0);
+	free(buffer);
+
+	if (result_send <= 0){
+		_exit_with_error(socket, "No se pudo enviar el md5", NULL);
 	}
 
 	log_info(logger, "MD5 enviado.");
@@ -301,7 +299,7 @@ void wait_confirmation(int socket) {
 	  _exit_with_error(socket, "No se pudo confirmar la recepción del MD5", NULL);
   }
 
-  if (&result != 1){
+  if (result != 1){
 	  _exit_with_error(socket, "El md5 NO coincidió", NULL);
   }
 
@@ -324,5 +322,6 @@ void _exit_with_error(int socket,char* error_msg, void * buffer){
 		free(buffer);
 	}
 	log_error(logger, error_msg);
+	close(socket);
 	exit_gracefully(1);
 }
